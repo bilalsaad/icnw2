@@ -2,6 +2,8 @@ package com.example.helloworld;
 
 
 import com.sun.org.apache.regexp.internal.RE;
+import com.sun.tools.internal.ws.wsdl.document.http.HTTPOperation;
+import com.sun.tools.internal.ws.wsdl.parser.InternalizationLogic;
 
 import java.io.*;
 import java.net.ServerSocket;
@@ -49,21 +51,53 @@ public class HelloWorld {
         InputStream input = client.getInputStream();
         OutputStream output = client.getOutputStream();
         Pair<HttpRequest, Integer> request = HttpRequest.parseRequest(input);
-        int c = request.snd();
-        String body = (request.ok()) ? get_file(request.fst().url()) : "";
-        HttpResponse resp = new HttpResponse(new HashMap<String, String>(), c, body);
+        HttpResponse resp;
+        if (!request.ok()) {
+            resp = new HttpResponse(request.snd(), "");
+        } else {
+            Pair<String, FileStatus> file_or_status = get_file(request.fst().url());
+            resp = file_or_status.ok() ? new HttpResponse(request.snd(), file_or_status.fst()) :
+                                         new HttpResponse(file_stat_to_http(file_or_status.snd()), "");
+        }
+
         output.write(resp.getBytes());
+        client.close();
     }
 
-    private static String get_file(String path) throws IOException {
+    private static Integer file_stat_to_http(FileStatus snd) {
+        Integer ret = HTTP_CODES.NOT_IMPLEMENTED;
+        switch(snd) {
+            case NOT_FOUND:
+                ret = HTTP_CODES.NOT_FOUND;
+                break;
+            case PERMISSION_DENIED:
+                ret = HTTP_CODES.FORBIDDEN;
+                break;
+            case OK:
+                ret = HTTP_CODES.OK;
+                break;
+        }
+
+        return ret;
+    }
+
+    private static Pair<String, FileStatus> get_file(String path) throws IOException {
+        File f = new File(path);
+        if(!f.exists() || f.isDirectory() || f.isHidden())
+            return new Pair<>(FileStatus.NOT_FOUND);
         List<String> lines = Files.readAllLines(Paths.get(path));
         StringBuilder b = new StringBuilder();
 
         for(String s : lines)
             b.append(s + " \n");
-        return b.toString();
+        return new Pair<>(b.toString(),FileStatus.OK, x-> FileStatus.OK.equals(x));
     }
 
+    private enum FileStatus {
+        NOT_FOUND,
+        PERMISSION_DENIED,
+        OK
+    }
 }
 
 class HttpRequest {
@@ -176,6 +210,11 @@ class HttpResponse {
     private Map<String, String> fheaders;
     private StatusLine fstatus_line;
     private String fbody;
+
+    public HttpResponse(Integer snd, String s) {
+        this(new HashMap<>(), snd, s);
+    }
+
     private class StatusLine {
         public final static String VERSION = "HTTP/1.1";
         public int fstatus_code;
@@ -224,6 +263,8 @@ class HTTP_CODES {
     public final static int OK = 200;
     public final static int BAD_REQUEST = 400;
     public static final int NOT_IMPLEMENTED = 501;
+    public static final int NOT_FOUND = 404;
+    public static final int FORBIDDEN = 403;
 }
 class Pair<T, V>{
     private T t;
@@ -239,7 +280,7 @@ class Pair<T, V>{
         return v;
     }
 
-    Pair(T new_t, V new_v,Function<V, Boolean> foo ) {
+    Pair(T new_t, V new_v, Function<V, Boolean> foo ) {
         t = new_t;
         v = new_v;
         func = foo;
